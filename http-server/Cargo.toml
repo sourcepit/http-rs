@@ -1,0 +1,8 @@
+[package]
+name = "http-server"
+version = "0.1.0"
+authors = ["Bernd Vogt <bernd.vogt@sourcepit.org>"]
+
+[dependencies]
+socket = { path = "../socket" }
+http-protocol = { path = "../http-protocol" }

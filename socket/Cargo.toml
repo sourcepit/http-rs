@@ -1,0 +1,6 @@
+[package]
+name = "socket"
+version = "0.1.0"
+authors = ["Bernd Vogt <bernd.vogt@sourcepit.org>"]
+
+[dependencies]

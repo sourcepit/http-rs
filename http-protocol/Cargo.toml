@@ -4,3 +4,5 @@ version = "0.1.0"
 authors = ["Bernd Vogt <bernd.vogt@sourcepit.org>"]
 
 [dependencies]
+failure = "0.1.3"
+common_failures = "0.1.1"

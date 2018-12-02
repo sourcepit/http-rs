@@ -1,3 +1,8 @@
+mod char_stream;
+
+#[cfg(test)]
+mod tests;
+
 //https://tools.ietf.org/html/rfc2396#appendix-A
 
 use common_failures::prelude::*;
@@ -5,11 +10,105 @@ use common_failures::prelude::*;
 use std::fmt::Write;
 use std::io::BufRead;
 
-// segment       = *pchar *( ";" param )
+// path          = [ abs_path | opaque_part ]
+
+// port          = *digit
 #[derive(Debug, PartialEq)]
+struct Port {
+    digits: Vec<u8>,
+}
+
+impl std::fmt::Display for Port {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for d in &self.digits {
+            fmt.write_char(*d as char)?;
+        }
+        Ok(())
+    }
+}
+
+fn port(r: &mut BufRead) -> Result<Option<Port>> {
+    let mut digits: Vec<u8> = Vec::new();
+    loop {
+        if let Some(c) = next_char(r)? {
+            match c {
+                Char::Normal(b) => if is_digit(b) {
+                    consume_char(r, &c);
+                    digits.push(b);
+                    continue;
+                },
+                _ => (),
+            }
+        }
+        break;
+    }
+    match digits.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(Port { digits })),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct PathSegments {
+    segments: Vec<Segment>,
+}
+
+impl std::fmt::Display for PathSegments {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for (i, s) in self.segments.iter().enumerate() {
+            if i > 0 {
+                fmt.write_char('/')?;
+            }
+            fmt.write_str(s.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn path_segments(r: &mut BufRead) -> Result<Option<PathSegments>> {
+    let mut segments: Vec<Segment> = Vec::new();
+    match segment(r)? {
+        Some(segment) => segments.push(segment),
+        None => (),
+    };
+    if !segments.is_empty() {
+        loop {
+            if let Some(c) = next_char(r)? {
+                if c.is(b'/') {
+                    consume_char(r, &c);
+                    match segment(r)? {
+                        Some(segment) => {
+                            segments.push(segment);
+                            continue;
+                        }
+                        None => {
+                            segments.push(Segment::new());
+                            break;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    match segments.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(PathSegments { segments })),
+    }
+}
+
+#[derive(Debug, PartialEq, Default)]
 struct Segment {
     pchars: Vec<Char>,
     params: Option<Vec<Param>>,
+}
+
+impl Segment {
+    fn new() -> Segment {
+        Segment {
+            ..Default::default()
+        }
+    }
 }
 
 impl std::fmt::Display for Segment {
@@ -40,17 +139,20 @@ fn segment(r: &mut BufRead) -> Result<Option<Segment>> {
         loop {
             if let Some(c) = next_char(r)? {
                 if c.is(b';') {
+                    consume_char(r, &c);
                     match param(r)? {
                         Some(p) => {
-                            consume_char(r, &c);
                             params.push(p);
+                            continue;
                         }
-                        None => break,
+                        None => {
+                            params.push(Param { pchars: Vec::new() });
+                            break;
+                        }
                     }
-                } else {
-                    break;
                 }
             }
+            break;
         }
         if !params.is_empty() {
             s.params = Some(params);
@@ -302,43 +404,4 @@ fn is_up_alpha(b: u8) -> bool {
 
 fn is_digit(b: u8) -> bool {
     b >= 48 && b <= 57
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::io::prelude::*;
-
-    use std::io::BufReader;
-
-    #[test]
-    fn test_param() {
-        let mut r = BufReader::new("".as_bytes());
-        let p = param(&mut r).unwrap();
-        assert_eq!(None, p);
-
-        let mut r = BufReader::new("f oo".as_bytes());
-        let p = param(&mut r).unwrap().unwrap();
-        assert_eq!(
-            Param {
-                pchars: vec![Char::Normal(b'f')]
-            },
-            p
-        );
-        let p = param(&mut r).unwrap();
-        assert_eq!(None, p);
-        let c = next_char(&mut r).unwrap().unwrap();
-        consume_char(&mut r, &c);
-        assert_eq!(Char::Normal(b' '), c);
-        let p = param(&mut r).unwrap().unwrap();
-        assert_eq!(
-            Param {
-                pchars: vec![Char::Normal(b'o'), Char::Normal(b'o')]
-            },
-            p
-        );
-        let p = param(&mut r).unwrap();
-        assert_eq!(None, p);
-    }
 }

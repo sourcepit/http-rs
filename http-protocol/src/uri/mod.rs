@@ -1,4 +1,4 @@
-mod char_stream;
+ mod char_stream;
 
 #[cfg(test)]
 mod tests;

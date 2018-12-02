@@ -4,8 +4,12 @@ use std::io::prelude::*;
 
 use std::io::BufReader;
 
+use uri::char_stream::CharStream;
+
 #[test]
 fn test_path_segments() {
+    CharStream::new("".as_bytes());
+
     let mut r = BufReader::new("".as_bytes());
     let ps = path_segments(&mut r).unwrap();
     assert_eq!(None, ps);

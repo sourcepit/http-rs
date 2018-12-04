@@ -26,7 +26,7 @@ impl<T: Read> CharStream<T> {
         }
     }
 
-    fn next(&mut self) -> Result<Option<Char>> {
+    pub fn next(&mut self) -> Result<Option<Char>> {
         match &self.current {
             Some(c) => return Ok(Some(*c)),
             None => (),
@@ -67,7 +67,7 @@ impl<T: Read> CharStream<T> {
         }
     }
 
-    fn consume(&mut self) -> Result<()> {
+    pub fn consume(&mut self) -> Result<()> {
         match self.current {
             Some(_) => {
                 self.current = None;
@@ -79,16 +79,48 @@ impl<T: Read> CharStream<T> {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum Char {
+pub enum Char {
     Ascii(u8),
     Escaped((u8, u8, u8)),
 }
 
 impl Char {
-    fn is(&self, byte: u8) -> bool {
+    pub fn is(&self, byte: u8) -> bool {
         match self {
             Char::Ascii(b) => *b == byte,
             _ => false,
+        }
+    }
+
+    pub fn is_pchar(&self) -> bool {
+        match self {
+            Char::Escaped(_) => true,
+            Char::Ascii(b) => {
+                is_unreserved(*b) || match b {
+                    b':' => true,
+                    b'@' => true,
+                    b'&' => true,
+                    b'=' => true,
+                    b'+' => true,
+                    b'$' => true,
+                    b',' => true,
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    pub fn is_uric(&self) -> bool {
+        match self {
+            Char::Ascii(b) => is_reserved(*b) || is_unreserved(*b),
+            Char::Escaped(bytes) => true,
+        }
+    }
+
+    pub fn is_digit(&self) -> bool {
+        match self {
+            Char::Ascii(b) => is_digit(*b),
+            Char::Escaped(bytes) => false,
         }
     }
 }
@@ -107,8 +139,67 @@ impl Display for Char {
     }
 }
 
+fn is_reserved(b: u8) -> bool {
+    match b {
+        b';' => true,
+        b'/' => true,
+        b'?' => true,
+        b':' => true,
+        b'@' => true,
+        b'&' => true,
+        b'=' => true,
+        b'+' => true,
+        b'$' => true,
+        b',' => true,
+        _ => false,
+    }
+}
+
+fn is_unreserved(b: u8) -> bool {
+    is_alphanum(b) || is_mark(b)
+}
+
+fn is_mark(b: u8) -> bool {
+    match b {
+        b'-' => true,
+        b'_' => true,
+        b'.' => true,
+        b'!' => true,
+        b'~' => true,
+        b'*' => true,
+        b'\'' => true,
+        b'(' => true,
+        b')' => true,
+        _ => false,
+    }
+}
+
+fn is_escaped(bytes: (u8, u8, u8)) -> bool {
+    bytes.0 == b'%' && is_hex(bytes.1) && is_hex(bytes.2)
+}
+
 fn is_hex(b: u8) -> bool {
     (b >= 65 && b <= 70) || (b >= 97 && b <= 102)
+}
+
+fn is_alphanum(b: u8) -> bool {
+    is_alpha(b) || is_digit(b)
+}
+
+fn is_alpha(b: u8) -> bool {
+    is_low_alpha(b) || is_up_alpha(b)
+}
+
+fn is_low_alpha(b: u8) -> bool {
+    b >= 97 && b <= 122
+}
+
+fn is_up_alpha(b: u8) -> bool {
+    b >= 65 && b <= 90
+}
+
+fn is_digit(b: u8) -> bool {
+    b >= 48 && b <= 57
 }
 
 #[cfg(test)]

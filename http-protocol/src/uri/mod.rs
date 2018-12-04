@@ -1,4 +1,5 @@
 mod char_stream;
+mod token_buffer;
 
 #[cfg(test)]
 mod tests;

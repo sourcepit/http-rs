@@ -7,8 +7,8 @@ use std::io::Read;
 
 pub struct CharStream<R: Read> {
     read: R,
-    buf: [u8; 1],
-    current: Option<Char>,
+    byte_buf: [u8; 1],
+    char_buf: Vec<Char>,
 }
 
 impl<T: Read> std::convert::From<T> for CharStream<T> {
@@ -21,15 +21,15 @@ impl<T: Read> CharStream<T> {
     pub fn new(read: T) -> CharStream<T> {
         CharStream {
             read: read,
-            buf: [0],
-            current: None,
+            byte_buf: [0],
+            char_buf: Vec::new(),
         }
     }
 
     pub fn next(&mut self) -> Result<Option<Char>> {
-        match &self.current {
-            Some(c) => return Ok(Some(*c)),
-            None => (),
+        match self.char_buf.is_empty() {
+            false => return Ok(Some(self.char_buf[self.char_buf.len() - 1])),
+            true => (),
         };
         let b = match self.next_byte()? {
             Some(b) => b,
@@ -55,25 +55,25 @@ impl<T: Read> CharStream<T> {
         } else {
             c = Char::Ascii(b);
         }
-        self.current = Some(c);
+        self.char_buf.push(c);
         Ok(Some(c))
     }
 
     fn next_byte(&mut self) -> Result<Option<u8>> {
-        match self.read.read(&mut self.buf)? {
+        match self.read.read(&mut self.byte_buf)? {
             0 => Ok(None),
-            1 => Ok(Some(self.buf[0])),
+            1 => Ok(Some(self.byte_buf[0])),
             _ => Err(format_err!("")),
         }
     }
 
     pub fn consume(&mut self) -> Result<()> {
-        match self.current {
-            Some(_) => {
-                self.current = None;
+        match self.char_buf.is_empty() {
+            false => {
+                self.char_buf.remove(0);
                 Ok(())
             }
-            None => Err(format_err!("Nothing to consume")),
+            true => Err(format_err!("Nothing to consume")),
         }
     }
 }

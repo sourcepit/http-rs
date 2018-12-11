@@ -1,18 +1,17 @@
 use common_failures::Result;
 use std::convert::From;
-use std::io::prelude::*;
 use std::io::Read;
 
-trait TokenStream<T> {
+pub trait TokenStream<T> {
     fn next(&mut self) -> Result<Option<T>>;
 }
 
-struct ByteStream<R: Read> {
+pub struct ByteStream<R: Read> {
     read: R,
     buffer: [u8; 1],
 }
 
-impl<'a, R: Read> From<R> for ByteStream<R> {
+impl<R: Read> From<R> for ByteStream<R> {
     fn from(from: R) -> ByteStream<R> {
         ByteStream {
             read: from,
@@ -31,9 +30,9 @@ impl<R: Read> TokenStream<u8> for ByteStream<R> {
     }
 }
 
-struct TokenBuffer<T, S: TokenStream<T>> {
-    stream: S,
-    buffer: Vec<T>,
+pub struct TokenBuffer<T, S: TokenStream<T>> {
+    pub(crate) stream: S,
+    pub(crate) buffer: Vec<T>,
 }
 
 impl<R: Read> From<R> for TokenBuffer<u8, ByteStream<R>> {
@@ -56,7 +55,11 @@ impl<T, S: TokenStream<T>> TokenBuffer<T, S> {
         Ok(token)
     }
 
-    pub fn push(&mut self, mut tokens: Vec<T>) {
+    pub fn push(&mut self, token: T) {
+        self.buffer.insert(0, token);
+    }
+
+    pub fn push_tokens(&mut self, mut tokens: Vec<T>) {
         for i in 0..tokens.len() {
             self.buffer.insert(i, tokens.remove(0));
         }
@@ -90,9 +93,9 @@ mod tests {
 
         assert_eq!(None, tb.pop().unwrap());
 
-        tb.push(word2);
-        tb.push(blank);
-        tb.push(word1);
+        tb.push_tokens(word2);
+        tb.push_tokens(blank);
+        tb.push_tokens(word1);
 
         let foo = tb.buffer;
         println!("{:?}", foo)

@@ -4,47 +4,37 @@ use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::fmt::Write;
 use std::io::Read;
+use uri::token_buffer::ByteStream;
+use uri::token_buffer::TokenBuffer;
+use uri::token_buffer::TokenStream;
 
-pub struct CharStream<R: Read> {
-    read: R,
-    byte_buf: [u8; 1],
-    char_buf: Vec<Char>,
+pub struct CharStream<T: TokenStream<u8>> {
+    byte_stream: T,
 }
 
-impl<T: Read> std::convert::From<T> for CharStream<T> {
-    fn from(read: T) -> CharStream<T> {
-        CharStream::new(read)
+impl<R: Read> From<R> for CharStream<ByteStream<R>> {
+    fn from(read: R) -> CharStream<ByteStream<R>> {
+        let byte_stream = ByteStream::from(read);
+        CharStream { byte_stream }
     }
 }
 
-impl<T: Read> CharStream<T> {
-    pub fn new(read: T) -> CharStream<T> {
-        CharStream {
-            read: read,
-            byte_buf: [0],
-            char_buf: Vec::new(),
-        }
-    }
-
-    pub fn next(&mut self) -> Result<Option<Char>> {
-        match self.char_buf.is_empty() {
-            false => return Ok(Some(self.char_buf[self.char_buf.len() - 1])),
-            true => (),
-        };
-        let b = match self.next_byte()? {
+impl<T: TokenStream<u8>> TokenStream<Char> for CharStream<T> {
+    fn next(&mut self) -> Result<Option<Char>> {
+        let b = match self.byte_stream.next()? {
             Some(b) => b,
             None => return Ok(None),
         };
         let c: Char;
         if b == b'%' {
-            let b2 = match self.next_byte()? {
+            let b2 = match self.byte_stream.next()? {
                 Some(b) => match is_hex(b) {
                     true => b,
                     false => return Err(format_err!("Invalid escape sequence.")),
                 },
                 None => return Err(format_err!("Unexpected end of escape sequence.")),
             };
-            let b3 = match self.next_byte()? {
+            let b3 = match self.byte_stream.next()? {
                 Some(b) => match is_hex(b) {
                     true => b,
                     false => return Err(format_err!("Invalid escape sequence.")),
@@ -55,25 +45,15 @@ impl<T: Read> CharStream<T> {
         } else {
             c = Char::Ascii(b);
         }
-        self.char_buf.push(c);
         Ok(Some(c))
     }
+}
 
-    fn next_byte(&mut self) -> Result<Option<u8>> {
-        match self.read.read(&mut self.byte_buf)? {
-            0 => Ok(None),
-            1 => Ok(Some(self.byte_buf[0])),
-            _ => Err(format_err!("")),
-        }
-    }
-
-    pub fn consume(&mut self) -> Result<()> {
-        match self.char_buf.is_empty() {
-            false => {
-                self.char_buf.remove(0);
-                Ok(())
-            }
-            true => Err(format_err!("Nothing to consume")),
+impl<R: Read> From<R> for TokenBuffer<Char, CharStream<ByteStream<R>>> {
+    fn from(from: R) -> TokenBuffer<Char, CharStream<ByteStream<R>>> {
+        TokenBuffer {
+            stream: CharStream::from(from),
+            buffer: Vec::new(),
         }
     }
 }
@@ -207,42 +187,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_next_and_consume() -> Result<()> {
-        let mut cs: CharStream<_> = "123".as_bytes().into();
-
-        let c = cs.next()?.unwrap();
-        assert_eq!("1", c.to_string());
-
-        let c = cs.next()?.unwrap();
-        assert_eq!("1", c.to_string());
-
-        cs.consume()?;
-
-        let c = cs.next()?.unwrap();
-        assert_eq!("2", c.to_string());
-
-        cs.consume()?;
-
-        let c = cs.consume();
-        assert!(c.is_err());
-
-        let c = cs.next()?.unwrap();
-        assert_eq!("3", c.to_string());
-
-        cs.consume()?;
-
-        let c = cs.next()?;
-        assert_eq!(None, c);
-
-        Ok(())
-    }
-
-    #[test]
     fn test_escaped() -> Result<()> {
         let mut cs: CharStream<_> = "%FF".as_bytes().into();
         let c = cs.next()?.unwrap();
         assert_eq!(Char::Escaped((b'%', b'F', b'F')), c);
-        cs.consume()?;
         assert_eq!(None, cs.next()?);
 
         let mut cs: CharStream<_> = "%GG".as_bytes().into();

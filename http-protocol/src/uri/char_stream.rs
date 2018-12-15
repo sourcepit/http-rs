@@ -93,14 +93,28 @@ impl Char {
     pub fn is_uric(&self) -> bool {
         match self {
             Char::Ascii(b) => is_reserved(*b) || is_unreserved(*b),
-            Char::Escaped(bytes) => true,
+            Char::Escaped(_) => true,
         }
     }
 
     pub fn is_digit(&self) -> bool {
         match self {
             Char::Ascii(b) => is_digit(*b),
-            Char::Escaped(bytes) => false,
+            Char::Escaped(_) => false,
+        }
+    }
+
+    pub fn is_alpha(&self) -> bool {
+        match self {
+            Char::Ascii(b) => is_alpha(*b),
+            Char::Escaped(_) => false,
+        }
+    }
+
+    pub fn is_alphanum(&self) -> bool {
+        match self {
+            Char::Ascii(b) => is_alphanum(*b),
+            Char::Escaped(_) => false,
         }
     }
 }

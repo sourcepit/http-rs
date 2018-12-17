@@ -12,7 +12,92 @@ use uri::token_buffer::*;
 
 // path          = [ abs_path | opaque_part ]
 
-// hostport      = host [ ":" port ]
+//  server        = [ [ userinfo "@" ] hostport ]
+fn server<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Server>>
+where
+    T: TokenStream<Char>,
+{
+    let mut ui = userinfo(tb)?;
+
+    let ui = match tb.pop()? {
+        Some(t) => match t.is(b'@') {
+            true => Some(ui),
+            false => {
+                tb.push(t);
+                tb.push_tokens(ui.0);
+                None
+            }
+        },
+        None => {
+            tb.push_tokens(ui.0);
+            None
+        }
+    };
+
+    let s = match hostport(tb)? {
+        Some(hp) => Some(Server(ui, hp)),
+        None => match ui {
+            Some(ui) => {
+                tb.push(Char::Ascii(b'@'));
+                tb.push_tokens(ui.0);
+                None
+            }
+            None => None,
+        },
+    };
+
+    Ok(s)
+}
+
+#[derive(Debug, PartialEq)]
+struct Server(Option<Userinfo>, Hostport);
+
+fn userinfo<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Userinfo>
+where
+    T: TokenStream<Char>,
+{
+    let mut tokens: Vec<Char> = Vec::new();
+    loop {
+        if let Some(t) = tb.pop()? {
+            let is_match = match t {
+                Char::Escaped(_) => true,
+                Char::Ascii(b) => {
+                    t.is_unreserved() || match b {
+                        b';' => true,
+                        b':' => true,
+                        b'&' => true,
+                        b'=' => true,
+                        b'+' => true,
+                        b'$' => true,
+                        b',' => true,
+                        _ => false,
+                    }
+                }
+            };
+            if is_match {
+                tokens.push(t);
+                continue;
+            } else {
+                tb.push(t);
+            }
+        }
+        break;
+    }
+    Ok(Userinfo(tokens))
+}
+
+#[derive(Debug, PartialEq)]
+struct Userinfo(Vec<Char>);
+
+impl std::fmt::Display for Userinfo {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
 fn hostport<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Hostport>>
 where
     T: TokenStream<Char>,
@@ -22,7 +107,7 @@ where
         let mut po: Option<Port> = None;
         if let Some(c) = tb.pop()? {
             if c.is(b':') {
-                po = port(tb)?;
+                po = Some(port(tb)?);
             } else {
                 tb.push(c);
             }
@@ -397,12 +482,12 @@ impl std::fmt::Display for Port {
     }
 }
 
-fn port<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Port>>
+fn port<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Port>
 where
     T: TokenStream<Char>,
 {
     let d = digits(tb)?;
-    Ok(Some(Port(d)))
+    Ok(Port(d))
 }
 
 fn digits<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Vec<Char>>

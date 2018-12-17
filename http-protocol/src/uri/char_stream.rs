@@ -117,6 +117,13 @@ impl Char {
             Char::Escaped(_) => false,
         }
     }
+
+    pub fn is_unreserved(&self) -> bool {
+        match self {
+            Char::Ascii(b) => is_unreserved(*b),
+            Char::Escaped(_) => false,
+        }
+    }
 }
 
 impl Display for Char {

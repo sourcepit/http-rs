@@ -10,9 +10,774 @@ use uri::char_stream::Char;
 use uri::token_buffer::TokenStream;
 use uri::token_buffer::*;
 
-// path          = [ abs_path | opaque_part ]
+fn uri<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Uri>>
+where
+    T: TokenStream<Char>,
+{
+    let u: Option<Uri>;
+    if let Some(au) = absolute_uri(tb)? {
+        let f: Option<String>;
+        if let Some(t) = tb.pop()? {
+            if t.is(b'#') {
+                f = Some(fragment(tb)?.to_string());
+            } else {
+                tb.push(t);
+                f = None;
+            }
+        } else {
+            f = None;
+        }
+        u = Some(Uri::AbsoluteUri(au, f));
+    } else if let Some(ru) = relative_uri(tb)? {
+        let f: Option<String>;
+        if let Some(t) = tb.pop()? {
+            if t.is(b'#') {
+                f = Some(fragment(tb)?.to_string());
+            } else {
+                tb.push(t);
+                f = None;
+            }
+        } else {
+            f = None;
+        }
+        u = Some(Uri::RelativeUri(ru, f));
+    } else {
+        u = None;
+    }
+    Ok(u)
+}
 
-//  server        = [ [ userinfo "@" ] hostport ]
+#[derive(Debug, PartialEq)]
+enum Uri {
+    AbsoluteUri(AbsoluteUri, Option<String>),
+    RelativeUri(RelativeUri, Option<String>),
+}
+
+impl Uri {
+    pub fn is_absolute(&self) -> bool {
+        match self {
+            Uri::AbsoluteUri(_, _) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        match self {
+            Uri::AbsoluteUri(uri, _) => match &uri.1 {
+                HierOrOpaquePart::OpaquePart(_) => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    pub fn is_relative(&self) -> bool {
+        match self {
+            Uri::RelativeUri(_, _) => true,
+            _ => false,
+        }
+    }
+
+    pub fn scheme(&self) -> Option<&Scheme> {
+        match self {
+            Uri::AbsoluteUri(uri, _) => Some(&uri.0),
+            _ => None,
+        }
+    }
+
+    fn net_path(&self) -> Option<&NetPath> {
+        match self {
+            Uri::AbsoluteUri(uri, _) => match &uri.1 {
+                HierOrOpaquePart::HierPart(hier_part) => match &hier_part.0 {
+                    HierPartPath::NetPath(path) => Some(&path),
+                    _ => None,
+                },
+                _ => None,
+            },
+            Uri::RelativeUri(uri, _) => match &uri.0 {
+                RelativeUriPath::NetPath(path) => Some(&path),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn userinfo(&self) -> Option<&String> {
+        match self.net_path() {
+            Some(net_path) => match &net_path.authority {
+                Authority::Server(server) => match &server.0 {
+                    Some(userinfo) => Some(&userinfo),
+                    _ => None,
+                },
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    pub fn host(&self) -> Option<&Host> {
+        match self.net_path() {
+            Some(net_path) => match &net_path.authority {
+                Authority::Server(server) => {
+                    let hostport = &server.1;
+                    Some(&hostport.0)
+                }
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        match self.net_path() {
+            Some(net_path) => match &net_path.authority {
+                Authority::Server(server) => {
+                    let hostport = &server.1;
+                    match &hostport.1 {
+                        Some(port) => {
+                            let port_string = port.to_string();
+                            match port_string.is_empty() {
+                                true => None,
+                                false => Some(port_string.parse::<u16>().unwrap()),
+                            }
+                        }
+                        None => None,
+                    }
+                }
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    pub fn path(&self) -> Option<&String> {
+        match self {
+            Uri::AbsoluteUri(uri, _) => match &uri.1 {
+                HierOrOpaquePart::HierPart(hier_part) => match &hier_part.0 {
+                    HierPartPath::NetPath(net_path) => match &net_path.abs_path {
+                        Some(abs_path) => Some(&abs_path),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            },
+            Uri::RelativeUri(uri, _) => match &uri.0 {
+                RelativeUriPath::NetPath(net_path) => match &net_path.abs_path {
+                    Some(abs_path) => Some(&abs_path),
+                    _ => None,
+                },
+                RelativeUriPath::AbsPath(abs_path) => Some(&abs_path),
+                RelativeUriPath::RelPath(rel_path) => Some(&rel_path),
+            },
+        }
+    }
+
+    pub fn query(&self) -> Option<&String> {
+        match self {
+            Uri::AbsoluteUri(uri, _) => match &uri.1 {
+                HierOrOpaquePart::HierPart(hier_part) => match &hier_part.1 {
+                    Some(query) => Some(&query),
+                    _ => None,
+                },
+                _ => None,
+            },
+            Uri::RelativeUri(uri, _) => match &uri.1 {
+                Some(query) => Some(&query),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn fragment(&self) -> Option<&String> {
+        match self {
+            Uri::AbsoluteUri(_, fragment) => match fragment {
+                Some(fragment) => Some(&fragment),
+                _ => None,
+            },
+            Uri::RelativeUri(_, fragment) => match fragment {
+                Some(fragment) => Some(&fragment),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn opaque_part(&self) -> Option<&String> {
+        match self {
+            Uri::AbsoluteUri(uri, _) => match &uri.1 {
+                HierOrOpaquePart::OpaquePart(opaque_part) => Some(&opaque_part),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Uri {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Uri::AbsoluteUri(u, f) => {
+                fmt.write_str(u.to_string().as_str())?;
+                if let Some(f) = f {
+                    fmt.write_char('#')?;
+                    fmt.write_str(f.to_string().as_str())?;
+                }
+            }
+            Uri::RelativeUri(u, f) => {
+                fmt.write_str(u.to_string().as_str())?;
+                if let Some(f) = f {
+                    fmt.write_char('#')?;
+                    fmt.write_str(f.to_string().as_str())?;
+                }
+            }
+        };
+        Ok(())
+    }
+}
+
+fn absolute_uri<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<AbsoluteUri>>
+where
+    T: TokenStream<Char>,
+{
+    let au: Option<AbsoluteUri>;
+    if let Some(s) = scheme(tb)? {
+        if let Some(t) = tb.pop()? {
+            if t.is(b':') {
+                let hop: Option<HierOrOpaquePart>;
+                if let Some(hp) = hier_part(tb)? {
+                    hop = Some(HierOrOpaquePart::HierPart(hp));
+                } else if let Some(op) = opaque_part(tb)? {
+                    hop = Some(HierOrOpaquePart::OpaquePart(op.to_string()));
+                } else {
+                    hop = None;
+                }
+                if let Some(hop) = hop {
+                    au = Some(AbsoluteUri(s, hop));
+                } else {
+                    tb.push(t);
+                    tb.push_tokens(s.0);
+                    au = None;
+                }
+            } else {
+                tb.push(t);
+                tb.push_tokens(s.0);
+                au = None;
+            }
+        } else {
+            tb.push_tokens(s.0);
+            au = None;
+        }
+    } else {
+        au = None;
+    }
+    Ok(au)
+}
+
+#[derive(Debug, PartialEq)]
+struct AbsoluteUri(Scheme, HierOrOpaquePart);
+
+impl std::fmt::Display for AbsoluteUri {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt.write_str(self.0.to_string().as_str())?;
+        fmt.write_char(':')?;
+        fmt.write_str(self.1.to_string().as_str())?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum HierOrOpaquePart {
+    HierPart(HierPart),
+    OpaquePart(String),
+}
+
+impl std::fmt::Display for HierOrOpaquePart {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            HierOrOpaquePart::HierPart(o) => fmt.write_str(o.to_string().as_str()),
+            HierOrOpaquePart::OpaquePart(o) => fmt.write_str(o.to_string().as_str()),
+        }
+    }
+}
+
+fn relative_uri<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<RelativeUri>>
+where
+    T: TokenStream<Char>,
+{
+    let rup: Option<RelativeUriPath>;
+    if let Some(np) = net_path(tb)? {
+        rup = Some(RelativeUriPath::NetPath(np));
+    } else if let Some(ap) = abs_path(tb)? {
+        rup = Some(RelativeUriPath::AbsPath(ap.to_string()));
+    } else if let Some(rp) = rel_path(tb)? {
+        rup = Some(RelativeUriPath::RelPath(rp.to_string()));
+    } else {
+        rup = None;
+    }
+    let ru: Option<RelativeUri>;
+    if let Some(rup) = rup {
+        let q: Option<String>;
+        if let Some(t) = tb.pop()? {
+            if t.is(b'?') {
+                q = Some(query(tb)?.to_string());
+            } else {
+                tb.push(t);
+                q = None;
+            }
+        } else {
+            q = None;
+        }
+        ru = Some(RelativeUri(rup, q));
+    } else {
+        ru = None;
+    }
+    Ok(ru)
+}
+
+#[derive(Debug, PartialEq)]
+struct RelativeUri(RelativeUriPath, Option<String>);
+
+impl std::fmt::Display for RelativeUri {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt.write_str(&self.0.to_string().as_str())?;
+        if let Some(q) = &self.1 {
+            fmt.write_char('?')?;
+            fmt.write_str(q.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum RelativeUriPath {
+    NetPath(NetPath),
+    AbsPath(String),
+    RelPath(String),
+}
+
+impl std::fmt::Display for RelativeUriPath {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            RelativeUriPath::NetPath(o) => fmt.write_str(o.to_string().as_str()),
+            RelativeUriPath::AbsPath(o) => fmt.write_str(o.to_string().as_str()),
+            RelativeUriPath::RelPath(o) => fmt.write_str(o.to_string().as_str()),
+        }
+    }
+}
+
+fn hier_part<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<HierPart>>
+where
+    T: TokenStream<Char>,
+{
+    let hpp: Option<HierPartPath>;
+    if let Some(np) = net_path(tb)? {
+        hpp = Some(HierPartPath::NetPath(np));
+    } else if let Some(ap) = abs_path(tb)? {
+        hpp = Some(HierPartPath::AbsPath(ap));
+    } else {
+        hpp = None;
+    }
+    let hp: Option<HierPart>;
+    if let Some(hpp) = hpp {
+        let q: Option<String>;
+        if let Some(t) = tb.pop()? {
+            if t.is(b'?') {
+                q = Some(query(tb)?.to_string());
+            } else {
+                tb.push(t);
+                q = None;
+            }
+        } else {
+            q = None;
+        }
+        hp = Some(HierPart(hpp, q));
+    } else {
+        hp = None;
+    }
+    Ok(hp)
+}
+
+#[derive(Debug, PartialEq)]
+struct HierPart(HierPartPath, Option<String>);
+
+impl std::fmt::Display for HierPart {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt.write_str(&self.0.to_string().as_str())?;
+        if let Some(q) = &self.1 {
+            fmt.write_char('?')?;
+            fmt.write_str(q.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum HierPartPath {
+    NetPath(NetPath),
+    AbsPath(AbsPath),
+}
+
+impl std::fmt::Display for HierPartPath {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            HierPartPath::NetPath(o) => fmt.write_str(o.to_string().as_str()),
+            HierPartPath::AbsPath(o) => fmt.write_str(o.to_string().as_str()),
+        }
+    }
+}
+
+fn path<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Path>>
+where
+    T: TokenStream<Char>,
+{
+    let p: Option<Path>;
+    if let Some(ap) = abs_path(tb)? {
+        p = Some(Path::AbsPath(ap));
+    } else if let Some(op) = opaque_part(tb)? {
+        p = Some(Path::OpaquePart(op));
+    } else {
+        p = None;
+    }
+    Ok(p)
+}
+
+#[derive(Debug, PartialEq)]
+enum Path {
+    AbsPath(AbsPath),
+    OpaquePart(OpaquePart),
+}
+
+impl std::fmt::Display for Path {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Path::AbsPath(o) => fmt.write_str(o.to_string().as_str()),
+            Path::OpaquePart(o) => fmt.write_str(o.to_string().as_str()),
+        }
+    }
+}
+
+fn rel_path<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<RelPath>>
+where
+    T: TokenStream<Char>,
+{
+    let rp: Option<RelPath>;
+    if let Some(rs) = rel_segment(tb)? {
+        let ap = abs_path(tb)?;
+        rp = Some(RelPath(rs, ap));
+    } else {
+        rp = None;
+    }
+    Ok(rp)
+}
+
+#[derive(Debug, PartialEq)]
+struct RelPath(RelSegment, Option<AbsPath>);
+
+impl std::fmt::Display for RelPath {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt.write_str(&self.0.to_string().as_str())?;
+        if let Some(ap) = &self.1 {
+            fmt.write_str(ap.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn net_path<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<NetPath>>
+where
+    T: TokenStream<Char>,
+{
+    let np: Option<NetPath>;
+    if let Some(t1) = tb.pop()? {
+        if t1.is(b'/') {
+            if let Some(t2) = tb.pop()? {
+                if t2.is(b'/') {
+                    if let Some(a) = authority(tb)? {
+                        let ap = match abs_path(tb)? {
+                            Some(ap) => Some(ap.to_string()),
+                            None => None,
+                        };
+                        np = Some(NetPath {
+                            authority: a,
+                            abs_path: ap,
+                        });
+                    } else {
+                        tb.push(t2);
+                        tb.push(t1);
+                        np = None;
+                    }
+                } else {
+                    tb.push(t2);
+                    tb.push(t1);
+                    np = None;
+                }
+            } else {
+                tb.push(t1);
+                np = None;
+            }
+        } else {
+            tb.push(t1);
+            np = None;
+        }
+    } else {
+        np = None;
+    }
+    Ok(np)
+}
+
+#[derive(Debug, PartialEq)]
+struct NetPath {
+    authority: Authority,
+    abs_path: Option<String>,
+}
+
+impl std::fmt::Display for NetPath {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt.write_char('/')?;
+        fmt.write_char('/')?;
+        fmt.write_str(&self.authority.to_string().as_str())?;
+        if let Some(ap) = &self.abs_path {
+            fmt.write_str(ap.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn abs_path<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<AbsPath>>
+where
+    T: TokenStream<Char>,
+{
+    let mut ap: Option<AbsPath> = None;
+    if let Some(t) = tb.pop()? {
+        if t.is(b'/') {
+            if let Some(ps) = path_segments(tb)? {
+                ap = Some(AbsPath(ps));
+            } else {
+                tb.push(t);
+            }
+        } else {
+            tb.push(t);
+        }
+    }
+    Ok(ap)
+}
+
+#[derive(Debug, PartialEq)]
+struct AbsPath(PathSegments);
+
+impl std::fmt::Display for AbsPath {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt.write_char('/')?;
+        fmt.write_str(&self.0.to_string().as_str())?;
+        Ok(())
+    }
+}
+
+fn opaque_part<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<OpaquePart>>
+where
+    T: TokenStream<Char>,
+{
+    let mut tokens: Vec<Char> = Vec::new();
+    if let Some(t) = tb.pop()? {
+        if t.is_uric_no_slash() {
+            tokens.push(t);
+        } else {
+            tb.push(t);
+        }
+    }
+    if !tokens.is_empty() {
+        loop {
+            if let Some(t) = tb.pop()? {
+                if t.is_uric() {
+                    tokens.push(t);
+                    continue;
+                }
+                tb.push(t);
+            }
+            break;
+        }
+    }
+    match tokens.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(OpaquePart(tokens))),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct OpaquePart(Vec<Char>);
+
+impl std::fmt::Display for OpaquePart {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn rel_segment<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<RelSegment>>
+where
+    T: TokenStream<Char>,
+{
+    let mut tokens: Vec<Char> = Vec::new();
+    loop {
+        if let Some(t) = tb.pop()? {
+            if t.is_unreserved() {
+                tokens.push(t);
+                continue;
+            }
+            if t.is_escaped() {
+                tokens.push(t);
+                continue;
+            }
+            if let Char::Ascii(b) = t {
+                match b {
+                    b';' | b'@' | b'&' | b'=' | b'+' | b'$' | b',' => {
+                        tokens.push(t);
+                        continue;
+                    }
+                    _ => (),
+                };
+            }
+            tb.push(t);
+        }
+        break;
+    }
+    match tokens.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(RelSegment(tokens))),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RelSegment(Vec<Char>);
+
+impl std::fmt::Display for RelSegment {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn scheme<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Scheme>>
+where
+    T: TokenStream<Char>,
+{
+    let mut tokens: Vec<Char> = Vec::new();
+    if let Some(t) = tb.pop()? {
+        if t.is_alpha() {
+            tokens.push(t);
+        } else {
+            tb.push(t);
+        }
+    }
+    if !tokens.is_empty() {
+        loop {
+            if let Some(t) = tb.pop()? {
+                if t.is_alpha() || t.is_digit() || t.is(b'+') || t.is(b'-') || t.is(b'.') {
+                    tokens.push(t);
+                    continue;
+                }
+                tb.push(t);
+            }
+            break;
+        }
+    }
+    match tokens.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(Scheme(tokens))),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct Scheme(Vec<Char>);
+
+impl std::fmt::Display for Scheme {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn authority<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Authority>>
+where
+    T: TokenStream<Char>,
+{
+    let a: Option<Authority>;
+    if let Some(s) = server(tb)? {
+        a = Some(Authority::Server(s));
+    } else if let Some(r) = reg_name(tb)? {
+        a = Some(Authority::RegName(r));
+    } else {
+        a = None;
+    }
+    Ok(a)
+}
+
+#[derive(Debug, PartialEq)]
+enum Authority {
+    Server(Server),
+    RegName(RegName),
+}
+
+impl std::fmt::Display for Authority {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Authority::Server(o) => fmt.write_str(o.to_string().as_str()),
+            Authority::RegName(o) => fmt.write_str(o.to_string().as_str()),
+        }
+    }
+}
+
+fn reg_name<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<RegName>>
+where
+    T: TokenStream<Char>,
+{
+    let mut tokens: Vec<Char> = Vec::new();
+    loop {
+        if let Some(t) = tb.pop()? {
+            if t.is_unreserved() {
+                tokens.push(t);
+                continue;
+            }
+            if t.is_escaped() {
+                tokens.push(t);
+                continue;
+            }
+            if let Char::Ascii(b) = t {
+                match b {
+                    b'$' | b',' | b';' | b':' | b'@' | b'&' | b'=' | b'+' => {
+                        tokens.push(t);
+                        continue;
+                    }
+                    _ => (),
+                };
+            }
+            tb.push(t);
+        }
+        break;
+    }
+    match tokens.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(RegName(tokens))),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RegName(Vec<Char>);
+
+impl std::fmt::Display for RegName {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
 fn server<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Server>>
 where
     T: TokenStream<Char>,
@@ -35,7 +800,13 @@ where
     };
 
     let s = match hostport(tb)? {
-        Some(hp) => Some(Server(ui, hp)),
+        Some(hp) => {
+            let ui = match ui {
+                Some(ui) => Some(ui.to_string()),
+                None => None,
+            };
+            Some(Server(ui, hp))
+        }
         None => match ui {
             Some(ui) => {
                 tb.push(Char::Ascii(b'@'));
@@ -50,7 +821,18 @@ where
 }
 
 #[derive(Debug, PartialEq)]
-struct Server(Option<Userinfo>, Hostport);
+struct Server(Option<String>, Hostport);
+
+impl std::fmt::Display for Server {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if let Some(u) = &self.0 {
+            fmt.write_str(u.to_string().as_str())?;
+            fmt.write_char('@')?;
+        }
+        fmt.write_str(self.1.to_string().as_str())?;
+        Ok(())
+    }
+}
 
 fn userinfo<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Userinfo>
 where
@@ -678,39 +1460,319 @@ where
     }
 }
 
-fn query<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Vec<Char>>>
+fn query<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Query>
 where
     T: TokenStream<Char>,
 {
-    fragment(tb)
+    Ok(Query(fragment(tb)?.0))
 }
 
-fn fragment<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Option<Vec<Char>>>
+#[derive(Debug, PartialEq)]
+struct Query(Vec<Char>);
+
+impl std::fmt::Display for Query {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
+    }
+}
+
+fn fragment<T>(tb: &mut TokenBuffer<Char, T>) -> Result<Fragment>
 where
     T: TokenStream<Char>,
 {
-    let mut fragment: Vec<Char> = Vec::new();
+    let mut tokens: Vec<Char> = Vec::new();
     loop {
-        if let Some(c) = tb.pop()? {
-            if c.is_uric() {
-                fragment.push(c);
+        if let Some(t) = tb.pop()? {
+            if t.is_uric() {
+                tokens.push(t);
             } else {
-                tb.push(c);
+                tb.push(t);
                 break;
             }
         } else {
             break;
         }
     }
-    match fragment.len() {
-        0 => Ok(None),
-        _ => Ok(Some(fragment)),
+    Ok(Fragment(tokens))
+}
+
+#[derive(Debug, PartialEq)]
+struct Fragment(Vec<Char>);
+
+impl std::fmt::Display for Fragment {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in &self.0 {
+            fmt.write_str(c.to_string().as_str())?;
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_absolute_uri() {
+        let uri_str = "http://user:pwd@www.sourcepit.org:123/foo/bar.html?query=true#fragment";
+
+        let mut tb = TokenBuffer::from(uri_str.as_bytes());
+        assert_eq!(0, tb.buffer.len());
+
+        let u = uri(&mut tb).unwrap();
+        assert!(u.is_some());
+
+        let u = u.unwrap();
+        assert_eq!(true, u.is_absolute());
+        assert_eq!(false, u.is_opaque());
+        assert_eq!(false, u.is_relative());
+
+        let scheme = u.scheme();
+        assert!(scheme.is_some());
+        let scheme = scheme.unwrap();
+        assert_eq!("http", scheme.to_string());
+
+        let userinfo = u.userinfo();
+        assert!(userinfo.is_some());
+        let userinfo = userinfo.unwrap();
+        assert_eq!("user:pwd", userinfo);
+
+        let host = u.host();
+        assert!(host.is_some());
+        let host = host.unwrap();
+        assert_eq!("www.sourcepit.org", host.to_string());
+
+        let port = u.port();
+        assert!(port.is_some());
+        let port = port.unwrap();
+        assert_eq!(123, port);
+
+        let path = u.path();
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!("/foo/bar.html", path);
+
+        let query = u.query();
+        assert!(query.is_some());
+        let query = query.unwrap();
+        assert_eq!("query=true", query);
+
+        let fragment = u.fragment();
+        assert!(fragment.is_some());
+        let fragment = fragment.unwrap();
+        assert_eq!("fragment", fragment);
+
+        assert_eq!(uri_str, u.to_string());
+    }
+
+    #[test]
+    fn test_opaque_uri() {
+        let uri_str = "mailto:a@b.com#fragment";
+
+        let mut tb = TokenBuffer::from(uri_str.as_bytes());
+        assert_eq!(0, tb.buffer.len());
+
+        let u = uri(&mut tb).unwrap();
+        assert!(u.is_some());
+
+        let u = u.unwrap();
+        assert_eq!(true, u.is_absolute());
+        assert_eq!(true, u.is_opaque());
+        assert_eq!(false, u.is_relative());
+
+        let scheme = u.scheme();
+        assert!(scheme.is_some());
+        let scheme = scheme.unwrap();
+        assert_eq!("mailto", scheme.to_string());
+
+        let opaque_part = u.opaque_part();
+        assert!(opaque_part.is_some());
+        let opaque_part = opaque_part.unwrap();
+        assert_eq!("a@b.com", opaque_part.to_string());
+
+        let userinfo = u.userinfo();
+        assert!(userinfo.is_none());
+
+        let host = u.host();
+        assert!(host.is_none());
+
+        let path = u.path();
+        assert!(path.is_none());
+
+        let query = u.query();
+        assert!(query.is_none());
+
+        let fragment = u.fragment();
+        assert!(fragment.is_some());
+        let fragment = fragment.unwrap();
+        assert_eq!("fragment", fragment);
+
+        assert_eq!(uri_str, u.to_string());
+    }
+
+    #[test]
+    fn test_relative_uri_with_net_path() {
+        let uri_str = "//user:pwd@www.sourcepit.org:123/foo/bar.html?query=true#fragment";
+
+        let mut tb = TokenBuffer::from(uri_str.as_bytes());
+        assert_eq!(0, tb.buffer.len());
+
+        let u = uri(&mut tb).unwrap();
+        assert!(u.is_some());
+
+        let u = u.unwrap();
+        assert_eq!(false, u.is_absolute());
+        assert_eq!(false, u.is_opaque());
+        assert_eq!(true, u.is_relative());
+
+        let scheme = u.scheme();
+        assert!(scheme.is_none());
+
+        let userinfo = u.userinfo();
+        assert!(userinfo.is_some());
+        let userinfo = userinfo.unwrap();
+        assert_eq!("user:pwd", userinfo);
+
+        let host = u.host();
+        assert!(host.is_some());
+        let host = host.unwrap();
+        assert_eq!("www.sourcepit.org", host.to_string());
+
+        let port = u.port();
+        assert!(port.is_some());
+        let port = port.unwrap();
+        assert_eq!(123, port);
+
+        let path = u.path();
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!("/foo/bar.html", path);
+
+        let query = u.query();
+        assert!(query.is_some());
+        let query = query.unwrap();
+        assert_eq!("query=true", query);
+
+        let fragment = u.fragment();
+        assert!(fragment.is_some());
+        let fragment = fragment.unwrap();
+        assert_eq!("fragment", fragment);
+
+        assert_eq!(uri_str, u.to_string());
+    }
+
+    #[test]
+    fn test_relative_uri_with_abs_path() {
+        let uri_str = "/foo/bar.html?query=true#fragment";
+
+        let mut tb = TokenBuffer::from(uri_str.as_bytes());
+        assert_eq!(0, tb.buffer.len());
+
+        let u = uri(&mut tb).unwrap();
+        assert!(u.is_some());
+
+        let u = u.unwrap();
+        assert_eq!(false, u.is_absolute());
+        assert_eq!(false, u.is_opaque());
+        assert_eq!(true, u.is_relative());
+
+        let scheme = u.scheme();
+        assert!(scheme.is_none());
+
+        let userinfo = u.userinfo();
+        assert!(userinfo.is_none());
+
+        let host = u.host();
+        assert!(host.is_none());
+
+        let path = u.path();
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!("/foo/bar.html", path);
+
+        let query = u.query();
+        assert!(query.is_some());
+        let query = query.unwrap();
+        assert_eq!("query=true", query);
+
+        let fragment = u.fragment();
+        assert!(fragment.is_some());
+        let fragment = fragment.unwrap();
+        assert_eq!("fragment", fragment);
+
+        assert_eq!(uri_str, u.to_string());
+    }
+
+    #[test]
+    fn test_relative_uri_with_rel_path() {
+        let uri_str = "foo/bar.html?query=true#fragment";
+
+        let mut tb = TokenBuffer::from(uri_str.as_bytes());
+        assert_eq!(0, tb.buffer.len());
+
+        let u = uri(&mut tb).unwrap();
+        assert!(u.is_some());
+
+        let u = u.unwrap();
+        assert_eq!(false, u.is_absolute());
+        assert_eq!(false, u.is_opaque());
+        assert_eq!(true, u.is_relative());
+
+        let scheme = u.scheme();
+        assert!(scheme.is_none());
+
+        let userinfo = u.userinfo();
+        assert!(userinfo.is_none());
+
+        let host = u.host();
+        assert!(host.is_none());
+
+        let path = u.path();
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!("foo/bar.html", path);
+
+        let query = u.query();
+        assert!(query.is_some());
+        let query = query.unwrap();
+        assert_eq!("query=true", query);
+
+        let fragment = u.fragment();
+        assert!(fragment.is_some());
+        let fragment = fragment.unwrap();
+        assert_eq!("fragment", fragment);
+
+        assert_eq!(uri_str, u.to_string());
+    }
+
+    #[test]
+    fn test_server() {
+        let mut tb = TokenBuffer::from("".as_bytes());
+        let s = server(&mut tb).unwrap();
+        assert_eq!(0, tb.buffer.len());
+        assert_eq!(None, s);
+
+        let mut tb = TokenBuffer::from("foo".as_bytes());
+        let s = server(&mut tb).unwrap().unwrap();
+        assert_eq!(0, tb.buffer.len());
+        assert_eq!(None, s.0);
+        assert_eq!("foo", s.1.to_string());
+
+        let mut tb = TokenBuffer::from("foo@bar".as_bytes());
+        let s = server(&mut tb).unwrap().unwrap();
+        assert_eq!(0, tb.buffer.len());
+        assert!(s.0.is_some());
+        assert_eq!("foo", s.0.unwrap().to_string());
+        assert_eq!("bar", s.1.to_string());
+
+        let mut tb = TokenBuffer::from("foo@".as_bytes());
+        let s = server(&mut tb).unwrap();
+        assert_eq!(4, tb.buffer.len());
+        assert_eq!(None, s);
+    }
 
     #[test]
     fn test_hostport() {
@@ -1017,19 +2079,19 @@ mod tests {
     fn test_query() -> Result<()> {
         let mut tb = TokenBuffer::from("foo}bar".as_bytes());
 
-        let q = query(&mut tb)?.unwrap();
+        let q = query(&mut tb)?;
         assert_eq!(
             vec![Char::Ascii(b'f'), Char::Ascii(b'o'), Char::Ascii(b'o')],
-            q
+            q.0
         );
 
         let c = tb.pop()?.unwrap();
         assert_eq!(Char::Ascii(b'}'), c);
 
-        let q = query(&mut tb)?.unwrap();
+        let q = query(&mut tb)?;
         assert_eq!(
             vec![Char::Ascii(b'b'), Char::Ascii(b'a'), Char::Ascii(b'r')],
-            q
+            q.0
         );
 
         assert_eq!(None, tb.pop()?);
@@ -1041,19 +2103,19 @@ mod tests {
     fn test_fragment() -> Result<()> {
         let mut tb = TokenBuffer::from("foo}bar".as_bytes());
 
-        let f = fragment(&mut tb)?.unwrap();
+        let f = fragment(&mut tb)?;
         assert_eq!(
             vec![Char::Ascii(b'f'), Char::Ascii(b'o'), Char::Ascii(b'o')],
-            f
+            f.0
         );
 
         let c = tb.pop()?.unwrap();
         assert_eq!(Char::Ascii(b'}'), c);
 
-        let f = fragment(&mut tb)?.unwrap();
+        let f = fragment(&mut tb)?;
         assert_eq!(
             vec![Char::Ascii(b'b'), Char::Ascii(b'a'), Char::Ascii(b'r')],
-            f
+            f.0
         );
 
         assert_eq!(None, tb.pop()?);

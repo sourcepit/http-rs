@@ -72,6 +72,13 @@ impl Char {
         }
     }
 
+    pub fn is_escaped(&self) -> bool {
+        match self {
+            Char::Ascii(_) => false,
+            Char::Escaped(_) => true,
+        }
+    }
+
     pub fn is_pchar(&self) -> bool {
         match self {
             Char::Escaped(_) => true,
@@ -94,6 +101,26 @@ impl Char {
         match self {
             Char::Ascii(b) => is_reserved(*b) || is_unreserved(*b),
             Char::Escaped(_) => true,
+        }
+    }
+
+    pub fn is_uric_no_slash(&self) -> bool {
+        match self {
+            Char::Escaped(_) => true,
+            Char::Ascii(b) => {
+                is_unreserved(*b) || match b {
+                    b';' => true,
+                    b'?' => true,
+                    b':' => true,
+                    b'@' => true,
+                    b'&' => true,
+                    b'=' => true,
+                    b'+' => true,
+                    b'$' => true,
+                    b',' => true,
+                    _ => false,
+                }
+            }
         }
     }
 
